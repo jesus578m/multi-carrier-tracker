@@ -1,17 +1,17 @@
 {
   "name": "multi-carrier-tracker",
   "version": "1.0.0",
-  "description": "Simple multi-carrier tracking application using public tracking pages (no API keys)",
-  "main": "index.js",
+  "description": "Rastreo multi-paquetes usando solo paginas publicas (DHL, FedEx, UPS, Delta Cargo, Expeditors).",
   "type": "module",
+  "main": "app.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "node server.js",
+    "start": "node app.js",
+    "dev": "node app.js",
     "postinstall": "npx playwright install chromium"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "playwright": "^1.42.0",
-    "serverless-http": "^3.0.1"
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "playwright": "^1.47.2"
   }
 }
