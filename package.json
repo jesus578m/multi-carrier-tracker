@@ -1,17 +1,15 @@
 {
   "name": "multi-carrier-tracker",
   "version": "1.0.0",
-  "description": "Rastreo multi-paquetes usando solo paginas publicas (DHL, FedEx, UPS, Delta Cargo, Expeditors).",
+  "description": "Rastreo multi-paquetes usando solo paginas publicas.",
   "type": "module",
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
-    "dev": "node app.js",
-    "postinstall": "npx playwright install chromium"
+    "dev": "node app.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^4.19.2",
-    "playwright": "^1.47.2"
+    "express": "^4.19.2"
   }
 }
