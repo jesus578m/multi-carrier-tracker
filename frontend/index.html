@@ -14,6 +14,8 @@
       button { cursor: pointer; }
       .result { white-space: pre-wrap; }
       .muted { opacity: .7; font-size: 12px; }
+      .kv { margin: 4px 0; }
+      .kv span { display: inline-block; min-width: 160px; font-weight: 600; }
       .flex { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
       a.button { text-decoration: none; display: inline-block; }
     </style>
@@ -43,12 +45,19 @@
     </div>
 
     <p class="muted">
-      * Se usa información pública de las páginas oficiales. Si no es posible extraer
-      la “fecha estimada” automáticamente, te dejamos el enlace oficial para consultar.
+      * Se usa información pública de las páginas oficiales. Si no es posible extraer la información automáticamente, se incluye el enlace oficial como respaldo.
     </p>
 
     <script>
       const $ = (s) => document.querySelector(s);
+      function line(k, v) {
+        if (!v) return "";
+        const div = document.createElement("div");
+        div.className = "kv";
+        div.innerHTML = `<span>${k}:</span> ${v}`;
+        return div;
+      }
+
       $("#btn").addEventListener("click", async () => {
         const carrier = $("#carrier").value.trim();
         const code = $("#code").value.trim();
@@ -64,24 +73,35 @@
             $("#out").textContent = "Error: " + (json.error || "desconocido");
             return;
           }
-          const lines = [];
-          lines.push("Paquetería: " + json.carrier.toUpperCase());
-          lines.push("Guía: " + json.code);
-          if (json.status) lines.push("Estatus detectado: " + json.status);
-          if (json.eta) lines.push("Entrega estimada: " + json.eta);
-          if (json.title) lines.push("Página: " + json.title);
-          const div = document.createElement("div");
-          div.className = "flex";
-          div.innerHTML = `
-            <a class="button" target="_blank" rel="noopener"
-               href="${json.officialUrl}">
-               <button>Abrir página oficial</button>
-            </a>
-          `;
-          $("#out").textContent = lines.join("\n");
-          $("#out").appendChild(div);
+
+          const frag = document.createDocumentFragment();
+          frag.appendChild(line("Paquetería", json.carrier?.toUpperCase()));
+          frag.appendChild(line("Guía", json.code));
+          frag.appendChild(line("Estado", json.status));
+          frag.appendChild(line("Entrega estimada", json.eta));
+          frag.appendChild(line("Entregado el", json.deliveredAt));
+          frag.appendChild(line("Firmado por", json.signedBy));
+          frag.appendChild(line("Origen", json.origin));
+          frag.appendChild(line("Destino", json.destination));
+
+          const divBtn = document.createElement("div");
+          divBtn.className = "flex";
+          const a = document.createElement("a");
+          a.href = json.officialUrl;
+          a.target = "_blank";
+          a.rel = "noopener";
+          a.className = "button";
+          a.innerHTML = "<button>Abrir página oficial</button>";
+          divBtn.appendChild(a);
+
+          $("#out").innerHTML = "";
+          $("#out").appendChild(frag);
+          if (!json.status && !json.eta && !json.deliveredAt) {
+            // Si no pudimos extraer nada, deja explícito el botón
+            $("#out").appendChild(divBtn);
+          }
         } catch (e) {
-          $("#out").textContent = "Fallo la consulta. Intenta de nuevo.";
+          $("#out").textContent = "Falló la consulta. Intenta de nuevo.";
         }
       });
     </script>
