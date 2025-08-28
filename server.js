@@ -93,7 +93,7 @@ function extractStatus(text) {
  * @param {function(page: import('playwright').Page): Promise<object>} fn
  */
 async function withBrowser(fn) {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
   try {
@@ -277,6 +277,7 @@ app.get('/', (req, res) => {
 });
 
 // Start the server
-app.listen(port, () => {
-  console.log(`Multi-carrier tracker listening on port ${port}`);
-});
+// app.listen(port, () => {
+ //  console.log(`Multi-carrier tracker listening on port ${port}`);
+// }// );
+export default app;
