@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "description": "Rastreo multi-paquetes usando solo paginas publicas.",
   "type": "module",
-  "main": "app.js",
+  "main": "optionA.js",
   "scripts": {
-    "start": "node app.js",
-    "dev": "node app.js"
+    "start": "node optionA.js",
+    "dev": "node optionA.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
