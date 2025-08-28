@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Seguimiento de Paquetes - Multi-Carrier</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 2rem;
+      background-color: #f7f7f7;
+    }
+    h1 {
+      margin-bottom: 1rem;
+    }
+    .carrier {
+      margin-bottom: 1.5rem;
+      padding: 1rem;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+    label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-weight: bold;
+    }
+    input[type="text"] {
+      width: 100%;
+      padding: 0.5rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 1rem;
+    }
+    button {
+      margin-top: 0.5rem;
+      padding: 0.5rem 1rem;
+      font-size: 1rem;
+      border: none;
+      border-radius: 4px;
+      background-color: #0070f3;
+      color: #fff;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #005bb5;
+    }
+    .results {
+      margin-top: 2rem;
+      background: #fff;
+      padding: 1rem;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      white-space: pre-wrap;
+    }
+    .loading {
+      color: #999;
+    }
+  </style>
+</head>
+<body>
+  <h1>Seguimiento de Paquetes (Multi-Carrier)</h1>
+
+  <div class="carrier">
+    <label for="deltaNumber">Delta Cargo (AWB):</label>
+    <input id="deltaNumber" type="text" placeholder="999-12345678" />
+    <button onclick="track('delta')">Rastrear Delta</button>
+  </div>
+
+  <div class="carrier">
+    <label for="dhlNumber">DHL:</label>
+    <input id="dhlNumber" type="text" placeholder="Número de rastreo" />
+    <button onclick="track('dhl')">Rastrear DHL</button>
+  </div>
+
+  <div class="carrier">
+    <label for="fedexNumber">FedEx:</label>
+    <input id="fedexNumber" type="text" placeholder="Número de rastreo" />
+    <button onclick="track('fedex')">Rastrear FedEx</button>
+  </div>
+
+  <div class="carrier">
+    <label for="upsNumber">UPS:</label>
+    <input id="upsNumber" type="text" placeholder="Número de rastreo" />
+    <button onclick="track('ups')">Rastrear UPS</button>
+  </div>
+
+  <div class="carrier">
+    <label for="expeditorsNumber">Expeditors:</label>
+    <input id="expeditorsNumber" type="text" placeholder="Número de rastreo" />
+    <button onclick="track('expeditors')">Rastrear Expeditors</button>
+  </div>
+
+  <div id="results" class="results"></div>
+
+  <script>
+    async function track(carrier) {
+      const numberInput = document.getElementById(carrier + 'Number');
+      const resultsEl = document.getElementById('results');
+      const trackingNumber = numberInput.value.trim();
+      if (!trackingNumber) {
+        alert('Por favor, ingresa el número de rastreo.');
+        return;
+      }
+      resultsEl.textContent = 'Consultando...';
+      resultsEl.classList.add('loading');
+      try {
+        const resp = await fetch(`/track/${carrier}?number=${encodeURIComponent(trackingNumber)}`);
+        if (!resp.ok) {
+          throw new Error('No se pudo recuperar la información');
+        }
+        const data = await resp.json();
+        resultsEl.classList.remove('loading');
+        resultsEl.textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        resultsEl.classList.remove('loading');
+        resultsEl.textContent = 'Error al rastrear: ' + err.message;
+      }
+    }
+  </script>
+</body>
+</html>
