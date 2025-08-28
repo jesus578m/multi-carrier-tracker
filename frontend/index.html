@@ -1,123 +1,89 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Seguimiento de Paquetes - Multi-Carrier</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      margin: 0;
-      padding: 2rem;
-      background-color: #f7f7f7;
-    }
-    h1 {
-      margin-bottom: 1rem;
-    }
-    .carrier {
-      margin-bottom: 1.5rem;
-      padding: 1rem;
-      background: #fff;
-      border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    }
-    label {
-      display: block;
-      margin-bottom: 0.5rem;
-      font-weight: bold;
-    }
-    input[type="text"] {
-      width: 100%;
-      padding: 0.5rem;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      font-size: 1rem;
-    }
-    button {
-      margin-top: 0.5rem;
-      padding: 0.5rem 1rem;
-      font-size: 1rem;
-      border: none;
-      border-radius: 4px;
-      background-color: #0070f3;
-      color: #fff;
-      cursor: pointer;
-    }
-    button:hover {
-      background-color: #005bb5;
-    }
-    .results {
-      margin-top: 2rem;
-      background: #fff;
-      padding: 1rem;
-      border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-      white-space: pre-wrap;
-    }
-    .loading {
-      color: #999;
-    }
-  </style>
-</head>
-<body>
-  <h1>Seguimiento de Paquetes (Multi-Carrier)</h1>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+    <title>Rastreador Multi-Paquetería</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 24px; max-width: 900px; }
+      h1 { margin: 0 0 16px; }
+      .card { border: 1px solid rgba(0,0,0,.1); border-radius: 12px; padding: 16px; margin: 12px 0; }
+      .row { display: grid; grid-template-columns: 180px 1fr; gap: 12px; align-items: center; margin: 8px 0; }
+      input, select, button { padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(0,0,0,.2); font-size: 15px; }
+      button { cursor: pointer; }
+      .result { white-space: pre-wrap; }
+      .muted { opacity: .7; font-size: 12px; }
+      .flex { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+      a.button { text-decoration: none; display: inline-block; }
+    </style>
+  </head>
+  <body>
+    <h1>Rastreador Multi-Paquetería</h1>
+    <div class="card">
+      <div class="row">
+        <label>Paquetería</label>
+        <select id="carrier">
+          <option value="dhl">DHL</option>
+          <option value="fedex">FedEx</option>
+          <option value="ups">UPS</option>
+          <option value="delta">Delta Cargo</option>
+          <option value="expeditors">Expeditors</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>Número/Guía</label>
+        <input id="code" placeholder="Ingresa tu guía o AWB" />
+      </div>
+      <div class="row">
+        <label></label>
+        <button id="btn">Consultar</button>
+      </div>
+      <div id="out" class="result"></div>
+    </div>
 
-  <div class="carrier">
-    <label for="deltaNumber">Delta Cargo (AWB):</label>
-    <input id="deltaNumber" type="text" placeholder="999-12345678" />
-    <button onclick="track('delta')">Rastrear Delta</button>
-  </div>
+    <p class="muted">
+      * Se usa información pública de las páginas oficiales. Si no es posible extraer
+      la “fecha estimada” automáticamente, te dejamos el enlace oficial para consultar.
+    </p>
 
-  <div class="carrier">
-    <label for="dhlNumber">DHL:</label>
-    <input id="dhlNumber" type="text" placeholder="Número de rastreo" />
-    <button onclick="track('dhl')">Rastrear DHL</button>
-  </div>
-
-  <div class="carrier">
-    <label for="fedexNumber">FedEx:</label>
-    <input id="fedexNumber" type="text" placeholder="Número de rastreo" />
-    <button onclick="track('fedex')">Rastrear FedEx</button>
-  </div>
-
-  <div class="carrier">
-    <label for="upsNumber">UPS:</label>
-    <input id="upsNumber" type="text" placeholder="Número de rastreo" />
-    <button onclick="track('ups')">Rastrear UPS</button>
-  </div>
-
-  <div class="carrier">
-    <label for="expeditorsNumber">Expeditors:</label>
-    <input id="expeditorsNumber" type="text" placeholder="Número de rastreo" />
-    <button onclick="track('expeditors')">Rastrear Expeditors</button>
-  </div>
-
-  <div id="results" class="results"></div>
-
-  <script>
-    async function track(carrier) {
-      const numberInput = document.getElementById(carrier + 'Number');
-      const resultsEl = document.getElementById('results');
-      const trackingNumber = numberInput.value.trim();
-      if (!trackingNumber) {
-        alert('Por favor, ingresa el número de rastreo.');
-        return;
-      }
-      resultsEl.textContent = 'Consultando...';
-      resultsEl.classList.add('loading');
-      try {
-        const resp = await fetch(`/track/${carrier}?number=${encodeURIComponent(trackingNumber)}`);
-        if (!resp.ok) {
-          throw new Error('No se pudo recuperar la información');
+    <script>
+      const $ = (s) => document.querySelector(s);
+      $("#btn").addEventListener("click", async () => {
+        const carrier = $("#carrier").value.trim();
+        const code = $("#code").value.trim();
+        $("#out").textContent = "Consultando...";
+        try {
+          const r = await fetch("/api/track", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ carrier, code })
+          });
+          const json = await r.json();
+          if (!json.ok) {
+            $("#out").textContent = "Error: " + (json.error || "desconocido");
+            return;
+          }
+          const lines = [];
+          lines.push("Paquetería: " + json.carrier.toUpperCase());
+          lines.push("Guía: " + json.code);
+          if (json.status) lines.push("Estatus detectado: " + json.status);
+          if (json.eta) lines.push("Entrega estimada: " + json.eta);
+          if (json.title) lines.push("Página: " + json.title);
+          const div = document.createElement("div");
+          div.className = "flex";
+          div.innerHTML = `
+            <a class="button" target="_blank" rel="noopener"
+               href="${json.officialUrl}">
+               <button>Abrir página oficial</button>
+            </a>
+          `;
+          $("#out").textContent = lines.join("\n");
+          $("#out").appendChild(div);
+        } catch (e) {
+          $("#out").textContent = "Fallo la consulta. Intenta de nuevo.";
         }
-        const data = await resp.json();
-        resultsEl.classList.remove('loading');
-        resultsEl.textContent = JSON.stringify(data, null, 2);
-      } catch (err) {
-        resultsEl.classList.remove('loading');
-        resultsEl.textContent = 'Error al rastrear: ' + err.message;
-      }
-    }
-  </script>
-</body>
+      });
+    </script>
+  </body>
 </html>
