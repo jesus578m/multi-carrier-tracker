@@ -1,283 +1,261 @@
-// Multi-carrier tracking API server
-//
-// This server exposes endpoints for tracking shipments across several carriers
-// without relying on official APIs. It uses Playwright to automate
-// interactions with public tracking pages. Each carrier implementation is
-// best-effort: selectors and heuristics may need adjustments if the
-// providers change their websites.
-//
-// To run the server locally:
-//   npm install
-//   npm run dev
-//
-// The server will be available at http://localhost:3000 and the static
-// frontend UI at /frontend/index.html.
+import express from "express";
+import cors from "cors";
+import path from "path";
+import { fileURLToPath } from "url";
+import { chromium } from "playwright";
 
-import express from 'express';
-import { chromium } from 'playwright';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Simple in-memory cache to reduce repeated scraping.
-// Entries expire after a fixed TTL.
-const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const cache = new Map();
+app.use(cors());
+app.use(express.json({ limit: "1mb" }));
+app.use("/frontend", express.static(path.join(__dirname, "frontend")));
 
-/**
- * Get a cached result if available and not expired.
- * @param {string} key
- * @returns {object|null}
- */
-function getFromCache(key) {
-  const entry = cache.get(key);
-  if (!entry) return null;
-  const now = Date.now();
-  if (now < entry.expires) return entry.value;
-  cache.delete(key);
-  return null;
-}
+app.get("/api/health", (_req, res) => {
+  res.json({ ok: true, ts: new Date().toISOString() });
+});
 
-/**
- * Set a value in the cache.
- * @param {string} key
- * @param {object} value
- */
-function setInCache(key, value) {
-  const expires = Date.now() + CACHE_TTL_MS;
-  cache.set(key, { value, expires });
-}
+/* ---------------------------------- utils --------------------------------- */
 
-/**
- * Utility to extract date-like strings from a text body.
- * Supports formats like '26 August 2025', '26 Ago 2025', etc.
- * @param {string} text
- * @returns {string|null}
- */
-function extractDate(text) {
-  // Match dates in formats with day + word month + year. Month names in
-  // English and Spanish.
-  const months = [
-    'January','February','March','April','May','June','July','August','September','October','November','December',
-    'Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre',
-    'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec',
-    'Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'
-  ];
-  const monthRegex = months.join('|');
-  const dateRegex = new RegExp(`\b(\d{1,2})\s+(${monthRegex})\s+(\d{4})\b`, 'i');
-  const match = text.match(dateRegex);
-  return match ? match[0].trim() : null;
-}
-
-/**
- * Utility to extract a status from a text body. Looks for common status
- * keywords in English and Spanish.
- * @param {string} text
- * @returns {string|null}
- */
-function extractStatus(text) {
-  const statuses = [
-    'Delivered', 'Out for delivery', 'In Transit', 'In transit', 'Shipped', 'Shipment information received',
-    'Entregado', 'En reparto', 'En tránsito', 'En transito', 'En Camino', 'Recibido', 'Despachado', 'En camino'
-  ];
-  for (const status of statuses) {
-    const regex = new RegExp(status, 'i');
-    if (regex.test(text)) return status;
+function officialLink(carrier, code) {
+  const c = (carrier || "").toLowerCase();
+  switch (c) {
+    case "dhl":
+      return `https://www.dhl.com/mx-es/home/rastreo.html?tracking-id=${encodeURIComponent(code)}`;
+    case "fedex":
+      return `https://www.fedex.com/fedextrack/?trknbr=${encodeURIComponent(code)}&cntry_code=mx_esp`;
+    case "ups":
+      return `https://www.ups.com/track?loc=es_MX&tracknum=${encodeURIComponent(code)}&requester=ST/`;
+    case "delta":
+    case "delta-cargo":
+    case "deltacargo":
+      return `https://www.deltacargo.com/Cargo/trackShipment?airbillnumber=${encodeURIComponent(code)}`;
+    case "expeditors":
+      return `https://www.expeditors.com/tracking`;
+    default:
+      return null;
   }
-  return null;
 }
 
-/**
- * Generic scraper wrapper. Launches a browser, runs a callback, and ensures
- * proper teardown. The callback receives the Playwright page instance.
- * @param {function(page: import('playwright').Page): Promise<object>} fn
- */
-async function withBrowser(fn) {
-  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+async function withPage(fn) {
+  const browser = await chromium.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+  const context = await browser.newContext({
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
+  });
   const page = await context.newPage();
   try {
-    const result = await fn(page);
+    return await fn(page);
+  } finally {
+    await context.close();
     await browser.close();
-    return result;
-  } catch (err) {
-    await browser.close();
-    throw err;
   }
 }
 
-/**
- * Scrape tracking details from DHL.
- * @param {string} trackingNumber
- */
-async function scrapeDHL(trackingNumber) {
-  return withBrowser(async (page) => {
-    await page.goto('https://www.dhl.com/mx-es/home/rastreo.html', { waitUntil: 'domcontentloaded' });
-    // Accept cookies if present
-    const acceptBtn = await page.$('button[aria-label="accept functional cookies"]');
-    if (acceptBtn) await acceptBtn.click().catch(() => {});
+function pickFirst(...vals) {
+  for (const v of vals) if (v && String(v).trim()) return String(v).trim();
+  return null;
+}
 
-    // Find and fill the tracking input. DHL's page uses input[name="trackingNumber"] or similar.
-    const inputSelector = 'input[type="text"]';
-    await page.fill(inputSelector, trackingNumber);
-    // Press enter to submit
-    await page.keyboard.press('Enter');
-    // Wait for potential result container to appear
-    await page.waitForTimeout(5000);
-    const bodyText = await page.textContent('body');
-    const latestDate = extractDate(bodyText || '');
-    const latestStatus = extractStatus(bodyText || '') || 'Unknown';
-    return { latest_status: latestStatus, latest_date: latestDate };
+/* -------------------------- parsers por paquetería ------------------------- */
+
+// FedEx: intenta leer “Estado de la entrega”, “Entregado”, “Firmado por”, y ETA
+async function scrapeFedEx(url) {
+  return await withPage(async (page) => {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
+    // FedEx suele renderizar mucho texto útil en body.innerText
+    const text = await page.evaluate(() => document.body.innerText || "");
+
+    const status =
+      (text.match(/Estado de la entrega\s*([^\n]+)/i)?.[1]) ||
+      (text.match(/Delivery Status\s*([^\n]+)/i)?.[1]) ||
+      (text.match(/\bEntregado\b/i)?.[0]) ||
+      (text.match(/\bDelivered\b/i)?.[0]) ||
+      null;
+
+    const deliveredAt =
+      (text.match(/Entregado\s+El\s+([0-9/.\-]+(?:\s+a\s+las\s+\d{1,2}:\d{2})?)/i)?.[1]) ||
+      (text.match(/Delivered\s+on\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4}.*?\d{1,2}:\d{2}\s*[ap]m?)/i)?.[1]) ||
+      null;
+
+    const signedBy =
+      (text.match(/Firmado por[:\s]+([A-ZÁÉÍÓÚÑ.\s]+)/i)?.[1]) ||
+      (text.match(/Signed by[:\s]+([A-Za-z.\s]+)/i)?.[1]) ||
+      null;
+
+    const eta =
+      (text.match(/Entrega (?:estimada|prevista|programada)\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
+      (text.match(/Estimated delivery\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
+      null;
+
+    // Origen/destino (si aparecen en la columna derecha)
+    const origin =
+      (text.match(/DESDE\s*([A-ZÁÉÍÓÚÑ ,\-]+)/i)?.[1]) ||
+      (text.match(/FROM\s*([A-Z ,\-]+)/i)?.[1]) ||
+      null;
+    const dest =
+      (text.match(/HACIA|DESTINO\s*([A-ZÁÉÍÓÚÑ ,\-]+)/i)?.[1]) ||
+      (text.match(/TO\s*([A-Z ,\-]+)/i)?.[1]) ||
+      null;
+
+    return { status, deliveredAt, signedBy, eta, origin, destination: dest };
   });
 }
 
-/**
- * Scrape tracking details from FedEx.
- * @param {string} trackingNumber
- */
-async function scrapeFedEx(trackingNumber) {
-  return withBrowser(async (page) => {
-    await page.goto('https://www.fedex.com/es-mx/tracking.html', { waitUntil: 'domcontentloaded' });
-    // FedEx tracking field may have id or name like trackingnumber.
-    const inputSelector = 'input[id*="tracking"]';
-    await page.fill(inputSelector, trackingNumber);
-    await page.keyboard.press('Enter');
-    // Wait a bit for results to load. FedEx uses dynamic loading.
-    await page.waitForTimeout(8000);
-    const bodyText = await page.textContent('body');
-    const latestDate = extractDate(bodyText || '');
-    const latestStatus = extractStatus(bodyText || '') || 'Unknown';
-    return { latest_status: latestStatus, latest_date: latestDate };
+// DHL: busca estado y fecha prevista/entrega
+async function scrapeDHL(url) {
+  return await withPage(async (page) => {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
+    const text = await page.evaluate(() => document.body.innerText || "");
+
+    const status =
+      (text.match(/Estado\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
+      (text.match(/\bEntregado\b/i)?.[0]) ||
+      (text.match(/\bEn tránsito\b/i)?.[0]) ||
+      (text.match(/\bOut for delivery\b/i)?.[0]) ||
+      null;
+
+    const eta =
+      (text.match(/Fecha de entrega (?:estimada|prevista)\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
+      (text.match(/Estimated delivery\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
+      null;
+
+    const deliveredAt =
+      (text.match(/Entregado\s*(?:el|on)\s*([^\n]+)/i)?.[1]) || null;
+
+    return { status, eta, deliveredAt };
   });
 }
 
-/**
- * Scrape tracking details from UPS.
- * @param {string} trackingNumber
- */
-async function scrapeUPS(trackingNumber) {
-  return withBrowser(async (page) => {
-    await page.goto('https://es-us.ups.com/track?loc=es_US&requester=ST/', { waitUntil: 'domcontentloaded' });
-    // Accept cookies if necessary.
-    const cookieButton = await page.$('button#onetrust-accept-btn-handler');
-    if (cookieButton) await cookieButton.click().catch(() => {});
-    // UPS uses input[name="trackNums"] or similar.
-    const inputSelector = 'input[id*="stApp_trackingNumber"]';
-    await page.fill(inputSelector, trackingNumber);
-    await page.keyboard.press('Enter');
-    await page.waitForTimeout(7000);
-    const bodyText = await page.textContent('body');
-    const latestDate = extractDate(bodyText || '');
-    const latestStatus = extractStatus(bodyText || '') || 'Unknown';
-    return { latest_status: latestStatus, latest_date: latestDate };
+// UPS: estado + ETA + posible “Firmado por”
+async function scrapeUPS(url) {
+  return await withPage(async (page) => {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
+    const text = await page.evaluate(() => document.body.innerText || "");
+
+    const status =
+      (text.match(/Estado\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
+      (text.match(/\bEntregado\b/i)?.[0]) ||
+      (text.match(/\bEn tránsito\b/i)?.[0]) ||
+      (text.match(/\bDelivered\b/i)?.[0]) ||
+      (text.match(/\bIn Transit\b/i)?.[0]) ||
+      null;
+
+    const eta =
+      (text.match(/Entrega (?:estimada|prevista)\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
+      (text.match(/Estimated Delivery\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
+      null;
+
+    const deliveredAt =
+      (text.match(/Entregado\s*(?:el|on)\s*([^\n]+)/i)?.[1]) ||
+      (text.match(/Delivered\s*(?:on)\s*([^\n]+)/i)?.[1]) ||
+      null;
+
+    const signedBy =
+      (text.match(/Firmado por[:\s]+([A-ZÁÉÍÓÚÑ.\s]+)/i)?.[1]) ||
+      (text.match(/Signed by[:\s]+([A-Za-z.\s]+)/i)?.[1]) ||
+      null;
+
+    return { status, eta, deliveredAt, signedBy };
   });
 }
 
-/**
- * Scrape tracking details from Delta Cargo.
- * @param {string} trackingNumber
- */
-async function scrapeDelta(trackingNumber) {
-  return withBrowser(async (page) => {
-    await page.goto('https://www.deltacargo.com/Cargo/trackShipment', { waitUntil: 'domcontentloaded' });
-    // Accept cookies or prompts if present
-    const cookie = await page.$('button[aria-label="Accept"]');
-    if (cookie) await cookie.click().catch(() => {});
-    // Normalize tracking number: allow dashes removed
-    const normalized = trackingNumber.replace(/[^A-Za-z0-9]/g, '');
-    // Input fields for AWB number may be multiple (3-digit prefix and 8-digit number). Try to detect.
-    const awbPrefix = normalized.slice(0, 3);
-    const awbNumber = normalized.slice(3);
-    const prefixSelector = 'input[name*="shipperPrefix"]';
-    const numberSelector = 'input[name*="masterAirwayBill"]';
-    const prefixEl = await page.$(prefixSelector);
-    const numberEl = await page.$(numberSelector);
-    if (prefixEl && numberEl) {
-      await prefixEl.fill(awbPrefix);
-      await numberEl.fill(awbNumber);
-    } else {
-      // Fallback: single input field
-      const single = await page.$('input[type="text"]');
-      if (single) await single.fill(trackingNumber);
-    }
-    // Submit by pressing enter
-    await page.keyboard.press('Enter');
-    await page.waitForTimeout(7000);
-    const bodyText = await page.textContent('body');
-    const latestDate = extractDate(bodyText || '');
-    const latestStatus = extractStatus(bodyText || '') || 'Unknown';
-    return { latest_status: latestStatus, latest_date: latestDate };
+// Delta Cargo: intenta leer último evento y destino
+async function scrapeDeltaCargo(url) {
+  return await withPage(async (page) => {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
+    const text = await page.evaluate(() => document.body.innerText || "");
+
+    const status =
+      (text.match(/Estado\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
+      (text.match(/En tránsito|Entregado|Listo para retiro/i)?.[0]) ||
+      null;
+
+    const eta =
+      (text.match(/Fecha (?:estimada|prevista)\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
+      null;
+
+    const lastScan =
+      (text.match(/(?:Última actualización|Last update)\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
+      null;
+
+    return { status, eta, lastScan };
   });
 }
 
-/**
- * Scrape tracking details from Expeditors. Expeditors has regional portals,
- * so this function serves as a placeholder and may need adjustment.
- * @param {string} trackingNumber
- */
-async function scrapeExpeditors(trackingNumber) {
-  return withBrowser(async (page) => {
-    // This is a placeholder; you may need to update the URL to match your
-    // Expeditors portal. Many Expeditors customers track via
-    // https://exp.oceanexp.com/ or similar. Adjust selectors accordingly.
-    await page.goto('https://www.expeditors.com/tracking', { waitUntil: 'domcontentloaded' });
-    // Attempt to find a generic input field
-    const input = await page.$('input[type="text"]');
-    if (input) {
-      await input.fill(trackingNumber);
-      await page.keyboard.press('Enter');
-    }
-    await page.waitForTimeout(7000);
-    const bodyText = await page.textContent('body');
-    const latestDate = extractDate(bodyText || '');
-    const latestStatus = extractStatus(bodyText || '') || 'Unknown';
-    return { latest_status: latestStatus, latest_date: latestDate };
+// Expeditors: muchas veces requiere interacción; damos mejor esfuerzo
+async function scrapeExpeditors(url) {
+  return await withPage(async (page) => {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
+    const text = await page.evaluate(() => document.body.innerText || "");
+    const status =
+      (text.match(/Status\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
+      (text.match(/Entregado|En tránsito|Listo/i)?.[0]) ||
+      null;
+    return { status };
   });
 }
 
-// Mapping of carrier id to scraper function
-const scrapers = {
-  dhl: scrapeDHL,
-  fedex: scrapeFedEx,
-  ups: scrapeUPS,
-  delta: scrapeDelta,
-  expeditors: scrapeExpeditors
-};
+async function scrapeByCarrier(carrier, url) {
+  const c = (carrier || "").toLowerCase();
+  if (c.includes("fedex")) return await scrapeFedEx(url);
+  if (c.includes("dhl")) return await scrapeDHL(url);
+  if (c.includes("ups")) return await scrapeUPS(url);
+  if (c.includes("delta")) return await scrapeDeltaCargo(url);
+  if (c.includes("expeditors")) return await scrapeExpeditors(url);
+  return {};
+}
 
-// Endpoint: GET /track/:carrier?number=XYZ
-app.get('/track/:carrier', async (req, res) => {
-  const { carrier } = req.params;
-  const trackingNumber = (req.query.number || '').toString().trim();
-  if (!scrapers[carrier]) {
-    return res.status(404).json({ error: `Unsupported carrier '${carrier}'` });
-  }
-  if (!trackingNumber) {
-    return res.status(400).json({ error: 'Missing "number" query parameter' });
-  }
-  const cacheKey = `${carrier}:${trackingNumber}`;
-  const cached = getFromCache(cacheKey);
-  if (cached) {
-    return res.json({ carrier, trackingNumber, ...cached, cached: true });
-  }
+/* --------------------------------- endpoint -------------------------------- */
+
+app.post("/api/track", async (req, res) => {
   try {
-    const result = await scrapers[carrier](trackingNumber);
-    setInCache(cacheKey, result);
-    res.json({ carrier, trackingNumber, ...result, cached: false });
+    const { carrier, code } = req.body || {};
+    if (!carrier || !code) {
+      return res.status(400).json({ ok: false, error: "Faltan parámetros: carrier y code" });
+    }
+
+    const url = officialLink(carrier, code);
+    if (!url) {
+      return res.status(400).json({ ok: false, error: "Carrier no soportado", carrier });
+    }
+
+    // scrape específico por paquetería (con fallback si falla)
+    let details = {};
+    try {
+      details = await scrapeByCarrier(carrier, url);
+    } catch (_) {
+      details = {};
+    }
+
+    return res.json({
+      ok: true,
+      carrier,
+      code,
+      officialUrl: url,
+      ...details, // status, eta, deliveredAt, signedBy, etc. según paquetería
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message || 'Tracking failed' });
+    console.error(err);
+    res.status(500).json({ ok: false, error: "Error interno" });
   }
 });
 
-// Serve static frontend from the "frontend" directory
-app.use('/frontend', express.static('frontend'));
+// raíz -> UI
+app.get("/", (_req, res) => res.redirect("/frontend/index.html"));
 
-// Redirect root to frontend UI
-app.get('/', (req, res) => {
-  res.redirect('/frontend/index.html');
+app.listen(port, () => {
+  console.log(`Multi-carrier tracker listening on port ${port}`);
 });
 
-// Start the server
-// app.listen(port, () => {
- //  console.log(`Multi-carrier tracker listening on port ${port}`);
-// }// );
-export default app;
