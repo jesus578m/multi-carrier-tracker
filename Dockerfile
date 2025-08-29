@@ -9,7 +9,7 @@ COPY package*.json ./
 # Dependencias del proyecto
 RUN npm install
 
-# Asegurar navegadores de Playwright (Chromium)
+# Navegadores de Playwright (Chromium)
 RUN npx playwright install chromium
 
 # Código de la app
