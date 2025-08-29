@@ -6,16 +6,16 @@
     <title>Rastreador Multi-Paquetería</title>
     <style>
       :root { color-scheme: light dark; }
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 24px; max-width: 900px; }
-      h1 { margin: 0 0 16px; }
+      body { font-family: system-ui,-apple-system,Segoe UI,Roboto,sans-serif; margin: 0; padding: 24px; max-width: 1000px; }
+      h1 { margin: 0 0 16px; font-size: 42px; }
       .card { border: 1px solid rgba(0,0,0,.1); border-radius: 12px; padding: 16px; margin: 12px 0; }
       .row { display: grid; grid-template-columns: 180px 1fr; gap: 12px; align-items: center; margin: 8px 0; }
       input, select, button { padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(0,0,0,.2); font-size: 15px; }
       button { cursor: pointer; }
-      .result { white-space: pre-wrap; }
+      .result { white-space: normal; }
       .muted { opacity: .7; font-size: 12px; }
-      .kv { margin: 4px 0; }
-      .kv span { display: inline-block; min-width: 160px; font-weight: 600; }
+      .kv { margin: 6px 0; }
+      .kv span { display: inline-block; min-width: 180px; font-weight: 600; }
       .flex { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
       a.button { text-decoration: none; display: inline-block; }
     </style>
@@ -27,7 +27,7 @@
         <label>Paquetería</label>
         <select id="carrier">
           <option value="dhl">DHL</option>
-          <option value="fedex">FedEx</option>
+          <option value="fedex" selected>FedEx</option>
           <option value="ups">UPS</option>
           <option value="delta">Delta Cargo</option>
           <option value="expeditors">Expeditors</option>
@@ -66,11 +66,9 @@
         out.textContent = "Consultando...";
 
         try {
-          // ✅ GET con parámetros en la URL (compatible con Railway/WAF)
           const url = `/api/track?carrier=${encodeURIComponent(carrier)}&code=${encodeURIComponent(code)}`;
           const r = await fetch(url);
           const json = await r.json();
-
           if (!json.ok) {
             out.textContent = "Error: " + (json.error || "desconocido");
             return;
@@ -86,7 +84,6 @@
           addLine(frag, "Origen", json.origin);
           addLine(frag, "Destino", json.destination);
 
-          // Botón a la página oficial (si no hubo extracción de datos)
           const divBtn = document.createElement("div");
           divBtn.className = "flex";
           const a = document.createElement("a");
@@ -102,7 +99,7 @@
           if (!json.status && !json.eta && !json.deliveredAt) {
             out.appendChild(divBtn);
           }
-        } catch (e) {
+        } catch {
           out.textContent = "Falló la consulta. Intenta de nuevo.";
         }
       });
