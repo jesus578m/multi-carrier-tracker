@@ -77,43 +77,65 @@ async function scrapeFedEx(url) {
   return await withPage(async (page) => {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
     await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
-    const text = await readBodyText(page);
 
-    const status =
-      (text.match(/Estado de la entrega\s*([^\n]+)/i)?.[1]) ||
-      (text.match(/\bEntregado\b/i)?.[0]) ||
-      (text.match(/\bEn camino\b/i)?.[0]) ||
-      (text.match(/\bDelivered\b/i)?.[0]) ||
-      null;
+    // Texto plano robusto (lo ideal es que ya tengas readBodyText; si no, usa page.evaluate(() => document.body.innerText))
+    const raw = await readBodyText(page);
+    // Limpia textos de accesibilidad que provocan falsos positivos
+    const text = raw
+      .replace(/skip to main content/gi, "")
+      .replace(/ir al contenido principal/gi, "");
 
-    const deliveredAt =
-      (text.match(/Entregado\s*(?:el|on)\s*([^\n]+)/i)?.[1]) ||
-      (text.match(/Delivered\s*(?:on)\s*([^\n]+)/i)?.[1]) ||
-      null;
+    const cap = (s) => s && s.trim().replace(/\s{2,}/g, " ");
 
-    const signedBy =
-      (text.match(/Firmado por[:\s]+([A-ZÁÉÍÓÚÑ.\s]+)/i)?.[1]) ||
-      (text.match(/Signed by[:\s]+([A-Za-z.\s]+)/i)?.[1]) ||
-      null;
+    // Estado (varias alternativas)
+    const status = cap(
+      (text.match(/(?:^|\n)\s*Estado de la entrega\s*([^\n]+)/i)?.[1]) ||
+      (text.match(/(?:^|\n)\s*(Entregado|En camino|Listo para la entrega)\b/i)?.[1]) ||
+      (text.match(/(?:^|\n)\s*(Delivered|In transit|On vehicle for delivery)\b/i)?.[1])
+    );
 
-    const eta =
+    // Fecha/hora de entrega
+    const deliveredAt = cap(
+      (text.match(/(?:^|\n)\s*Entregado\s*(?:el|on)?\s*([^\n]+)/i)?.[1]) ||
+      (text.match(/(?:^|\n)\s*Delivered\s*(?:on)?\s*([^\n]+)/i)?.[1])
+    );
+
+    // Firmado por
+    const signedBy = cap(
+      (text.match(/(?:^|\n)\s*Firmado por[:\s]+([A-ZÁÉÍÓÚÑ .-]{3,})/i)?.[1]) ||
+      (text.match(/(?:^|\n)\s*Signed by[:\s]+([A-Z .-]{3,})/i)?.[1])
+    );
+
+    // Origen (línea DESDE / FROM)
+    const origin = cap(
+      (text.match(/(?:^|\n)\s*DESDE\s*([A-ZÁÉÍÓÚÑ ,.-]+)\b/)?.[1]) ||
+      (text.match(/(?:^|\n)\s*FROM\s*([A-Z ,.-]+)\b/)?.[1])
+    );
+
+    // Destino: mejor tomar la localidad junto a ENTREGADO; si no hay, usar última ubicación "EN CAMINO" o "LISTO PARA LA ENTREGA"
+    let destination = cap(
+      (text.match(/(?:^|\n)\s*ENTREGADO\s*([A-ZÁÉÍÓÚÑ ,.-]+)\b/)?.[1])
+    );
+    if (!destination) {
+      destination = cap(
+        (text.match(/(?:^|\n)\s*LISTO PARA LA ENTREGA\s*([A-ZÁÉÍÓÚÑ ,.-]+)\b/)?.[1]) ||
+        (text.match(/(?:^|\n)\s*EN CAMINO\s*([A-ZÁÉÍÓÚÑ ,.-]+)\b/)?.[1])
+      );
+    }
+    // Evita falsos positivos como "main content"
+    if (destination && /main content/i.test(destination)) destination = null;
+
+    // ETA puede no estar disponible en entregados
+    const eta = cap(
       (text.match(/Entrega (?:estimada|prevista|programada)\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
       (text.match(/Estimated delivery\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
-      null;
-
-    const origin =
-      (text.match(/\bDESDE\b\s*([A-ZÁÉÍÓÚÑ ,\-]+)/i)?.[1]) ||
-      (text.match(/\bFROM\b\s*([A-Z ,\-]+)/i)?.[1]) ||
-      null;
-
-    const destination =
-      (text.match(/\bDESTINO\b\s*([A-ZÁÉÍÓÚÑ ,\-]+)/i)?.[1]) ||
-      (text.match(/\bTO\b\s*([A-Z ,\-]+)/i)?.[1]) ||
-      null;
+      null
+    );
 
     return { status, deliveredAt, signedBy, eta, origin, destination };
   });
 }
+
 
 async function scrapeDHL(url) {
   return await withPage(async (page) => {
