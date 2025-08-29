@@ -50,40 +50,43 @@
 
     <script>
       const $ = (s) => document.querySelector(s);
-      function line(k, v) {
-        if (!v) return "";
+
+      function addLine(frag, k, v) {
+        if (!v) return;
         const div = document.createElement("div");
         div.className = "kv";
         div.innerHTML = `<span>${k}:</span> ${v}`;
-        return div;
+        frag.appendChild(div);
       }
 
       $("#btn").addEventListener("click", async () => {
         const carrier = $("#carrier").value.trim();
         const code = $("#code").value.trim();
-        $("#out").textContent = "Consultando...";
+        const out = $("#out");
+        out.textContent = "Consultando...";
+
         try {
-          const r = await fetch("/api/track", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ carrier, code })
-          });
+          // ✅ GET con parámetros en la URL (compatible con Railway/WAF)
+          const url = `/api/track?carrier=${encodeURIComponent(carrier)}&code=${encodeURIComponent(code)}`;
+          const r = await fetch(url);
           const json = await r.json();
+
           if (!json.ok) {
-            $("#out").textContent = "Error: " + (json.error || "desconocido");
+            out.textContent = "Error: " + (json.error || "desconocido");
             return;
           }
 
           const frag = document.createDocumentFragment();
-          frag.appendChild(line("Paquetería", json.carrier?.toUpperCase()));
-          frag.appendChild(line("Guía", json.code));
-          frag.appendChild(line("Estado", json.status));
-          frag.appendChild(line("Entrega estimada", json.eta));
-          frag.appendChild(line("Entregado el", json.deliveredAt));
-          frag.appendChild(line("Firmado por", json.signedBy));
-          frag.appendChild(line("Origen", json.origin));
-          frag.appendChild(line("Destino", json.destination));
+          addLine(frag, "Paquetería", json.carrier?.toUpperCase());
+          addLine(frag, "Guía", json.code);
+          addLine(frag, "Estado", json.status);
+          addLine(frag, "Entrega estimada", json.eta);
+          addLine(frag, "Entregado el", json.deliveredAt);
+          addLine(frag, "Firmado por", json.signedBy);
+          addLine(frag, "Origen", json.origin);
+          addLine(frag, "Destino", json.destination);
 
+          // Botón a la página oficial (si no hubo extracción de datos)
           const divBtn = document.createElement("div");
           divBtn.className = "flex";
           const a = document.createElement("a");
@@ -94,16 +97,16 @@
           a.innerHTML = "<button>Abrir página oficial</button>";
           divBtn.appendChild(a);
 
-          $("#out").innerHTML = "";
-          $("#out").appendChild(frag);
+          out.innerHTML = "";
+          out.appendChild(frag);
           if (!json.status && !json.eta && !json.deliveredAt) {
-            // Si no pudimos extraer nada, deja explícito el botón
-            $("#out").appendChild(divBtn);
+            out.appendChild(divBtn);
           }
         } catch (e) {
-          $("#out").textContent = "Falló la consulta. Intenta de nuevo.";
+          out.textContent = "Falló la consulta. Intenta de nuevo.";
         }
       });
     </script>
   </body>
 </html>
+
