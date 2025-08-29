@@ -8,17 +8,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 8080;
+const USE_SCRAPE = process.env.USE_SCRAPE === "1";
 
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.use("/frontend", express.static(path.join(__dirname, "frontend")));
 
-app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, ts: new Date().toISOString() });
-});
-
-/* ---------------------------------- utils --------------------------------- */
+app.get("/api/health", (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
 function officialLink(carrier, code) {
   const c = (carrier || "").toLowerCase();
@@ -43,11 +40,11 @@ function officialLink(carrier, code) {
 async function withPage(fn) {
   const browser = await chromium.launch({
     headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    args: ["--no-sandbox", "--disable-setuid-sandbox"]
   });
   const context = await browser.newContext({
     userAgent:
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
   });
   const page = await context.newPage();
   try {
@@ -58,90 +55,65 @@ async function withPage(fn) {
   }
 }
 
-function pickFirst(...vals) {
-  for (const v of vals) if (v && String(v).trim()) return String(v).trim();
-  return null;
-}
-
-/* -------------------------- parsers por paquetería ------------------------- */
-
-// FedEx: intenta leer “Estado de la entrega”, “Entregado”, “Firmado por”, y ETA
 async function scrapeFedEx(url) {
   return await withPage(async (page) => {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
     await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
-    // FedEx suele renderizar mucho texto útil en body.innerText
     const text = await page.evaluate(() => document.body.innerText || "");
 
     const status =
       (text.match(/Estado de la entrega\s*([^\n]+)/i)?.[1]) ||
-      (text.match(/Delivery Status\s*([^\n]+)/i)?.[1]) ||
       (text.match(/\bEntregado\b/i)?.[0]) ||
-      (text.match(/\bDelivered\b/i)?.[0]) ||
-      null;
+      (text.match(/\bDelivered\b/i)?.[0]) || null;
 
     const deliveredAt =
-      (text.match(/Entregado\s+El\s+([0-9/.\-]+(?:\s+a\s+las\s+\d{1,2}:\d{2})?)/i)?.[1]) ||
-      (text.match(/Delivered\s+on\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4}.*?\d{1,2}:\d{2}\s*[ap]m?)/i)?.[1]) ||
-      null;
+      (text.match(/Entregado\s+El\s+([^\n]+)/i)?.[1]) ||
+      (text.match(/Delivered\s+on\s+([^\n]+)/i)?.[1]) || null;
 
     const signedBy =
       (text.match(/Firmado por[:\s]+([A-ZÁÉÍÓÚÑ.\s]+)/i)?.[1]) ||
-      (text.match(/Signed by[:\s]+([A-Za-z.\s]+)/i)?.[1]) ||
-      null;
+      (text.match(/Signed by[:\s]+([A-Za-z.\s]+)/i)?.[1]) || null;
 
     const eta =
       (text.match(/Entrega (?:estimada|prevista|programada)\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
-      (text.match(/Estimated delivery\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
-      null;
+      (text.match(/Estimated delivery\s*[:\-]?\s*([^\n]+)/i)?.[1]) || null;
 
-    // Origen/destino (si aparecen en la columna derecha)
     const origin =
       (text.match(/DESDE\s*([A-ZÁÉÍÓÚÑ ,\-]+)/i)?.[1]) ||
-      (text.match(/FROM\s*([A-Z ,\-]+)/i)?.[1]) ||
-      null;
-    const dest =
-      (text.match(/HACIA|DESTINO\s*([A-ZÁÉÍÓÚÑ ,\-]+)/i)?.[1]) ||
-      (text.match(/TO\s*([A-Z ,\-]+)/i)?.[1]) ||
-      null;
+      (text.match(/FROM\s*([A-Z ,\-]+)/i)?.[1]) || null;
 
-    return { status, deliveredAt, signedBy, eta, origin, destination: dest };
+    const destination =
+      (text.match(/HACIA|DESTINO\s*([A-ZÁÉÍÓÚÑ ,\-]+)/i)?.[1]) ||
+      (text.match(/TO\s*([A-Z ,\-]+)/i)?.[1]) || null;
+
+    return { status, deliveredAt, signedBy, eta, origin, destination };
   });
 }
 
-// DHL: busca estado y fecha prevista/entrega
 async function scrapeDHL(url) {
   return await withPage(async (page) => {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
     await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
     const text = await page.evaluate(() => document.body.innerText || "");
-
     const status =
       (text.match(/Estado\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
       (text.match(/\bEntregado\b/i)?.[0]) ||
       (text.match(/\bEn tránsito\b/i)?.[0]) ||
-      (text.match(/\bOut for delivery\b/i)?.[0]) ||
       null;
-
     const eta =
       (text.match(/Fecha de entrega (?:estimada|prevista)\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
-      (text.match(/Estimated delivery\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
-      null;
-
+      (text.match(/Estimated delivery\s*[:\-]?\s*([^\n]+)/i)?.[1]) || null;
     const deliveredAt =
       (text.match(/Entregado\s*(?:el|on)\s*([^\n]+)/i)?.[1]) || null;
-
     return { status, eta, deliveredAt };
   });
 }
 
-// UPS: estado + ETA + posible “Firmado por”
 async function scrapeUPS(url) {
   return await withPage(async (page) => {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
     await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
     const text = await page.evaluate(() => document.body.innerText || "");
-
     const status =
       (text.match(/Estado\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
       (text.match(/\bEntregado\b/i)?.[0]) ||
@@ -149,60 +121,43 @@ async function scrapeUPS(url) {
       (text.match(/\bDelivered\b/i)?.[0]) ||
       (text.match(/\bIn Transit\b/i)?.[0]) ||
       null;
-
     const eta =
       (text.match(/Entrega (?:estimada|prevista)\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
-      (text.match(/Estimated Delivery\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
-      null;
-
+      (text.match(/Estimated Delivery\s*[:\-]?\s*([^\n]+)/i)?.[1]) || null;
     const deliveredAt =
       (text.match(/Entregado\s*(?:el|on)\s*([^\n]+)/i)?.[1]) ||
-      (text.match(/Delivered\s*(?:on)\s*([^\n]+)/i)?.[1]) ||
-      null;
-
+      (text.match(/Delivered\s*(?:on)\s*([^\n]+)/i)?.[1]) || null;
     const signedBy =
       (text.match(/Firmado por[:\s]+([A-ZÁÉÍÓÚÑ.\s]+)/i)?.[1]) ||
-      (text.match(/Signed by[:\s]+([A-Za-z.\s]+)/i)?.[1]) ||
-      null;
-
+      (text.match(/Signed by[:\s]+([A-Za-z.\s]+)/i)?.[1]) || null;
     return { status, eta, deliveredAt, signedBy };
   });
 }
 
-// Delta Cargo: intenta leer último evento y destino
 async function scrapeDeltaCargo(url) {
   return await withPage(async (page) => {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
     await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
     const text = await page.evaluate(() => document.body.innerText || "");
-
     const status =
       (text.match(/Estado\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
-      (text.match(/En tránsito|Entregado|Listo para retiro/i)?.[0]) ||
-      null;
-
+      (text.match(/En tránsito|Entregado|Listo para retiro/i)?.[0]) || null;
     const eta =
-      (text.match(/Fecha (?:estimada|prevista)\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
-      null;
-
+      (text.match(/Fecha (?:estimada|prevista)\s*[:\-]?\s*([^\n]+)/i)?.[1]) || null;
     const lastScan =
-      (text.match(/(?:Última actualización|Last update)\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
-      null;
-
+      (text.match(/(?:Última actualización|Last update)\s*[:\-]?\s*([^\n]+)/i)?.[1]) || null;
     return { status, eta, lastScan };
   });
 }
 
-// Expeditors: muchas veces requiere interacción; damos mejor esfuerzo
 async function scrapeExpeditors(url) {
   return await withPage(async (page) => {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
     await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
     const text = await page.evaluate(() => document.body.innerText || "");
     const status =
       (text.match(/Status\s*[:\-]?\s*([^\n]+)/i)?.[1]) ||
-      (text.match(/Entregado|En tránsito|Listo/i)?.[0]) ||
-      null;
+      (text.match(/Entregado|En tránsito|Listo/i)?.[0]) || null;
     return { status };
   });
 }
@@ -217,35 +172,24 @@ async function scrapeByCarrier(carrier, url) {
   return {};
 }
 
-/* --------------------------------- endpoint -------------------------------- */
-
-app.post("/api/track", async (req, res) => {
+app.get("/api/track", async (req, res) => {
   try {
-    const { carrier, code } = req.body || {};
-    if (!carrier || !code) {
-      return res.status(400).json({ ok: false, error: "Faltan parámetros: carrier y code" });
-    }
+    const { carrier, code } = req.query || {};
+    if (!carrier || !code) return res.status(400).json({ ok: false, error: "Faltan parámetros: carrier y code" });
 
     const url = officialLink(carrier, code);
-    if (!url) {
-      return res.status(400).json({ ok: false, error: "Carrier no soportado", carrier });
-    }
+    if (!url) return res.status(400).json({ ok: false, error: "Carrier no soportado", carrier });
 
-    // scrape específico por paquetería (con fallback si falla)
     let details = {};
-    try {
-      details = await scrapeByCarrier(carrier, url);
-    } catch (_) {
-      details = {};
+    if (USE_SCRAPE) {
+      try {
+        details = await scrapeByCarrier(carrier, url);
+      } catch (e) {
+        details = {};
+      }
     }
 
-    return res.json({
-      ok: true,
-      carrier,
-      code,
-      officialUrl: url,
-      ...details, // status, eta, deliveredAt, signedBy, etc. según paquetería
-    });
+    return res.json({ ok: true, carrier, code, officialUrl: url, ...details });
   } catch (err) {
     console.error(err);
     res.status(500).json({ ok: false, error: "Error interno" });
@@ -255,7 +199,6 @@ app.post("/api/track", async (req, res) => {
 // raíz -> UI
 app.get("/", (_req, res) => res.redirect("/frontend/index.html"));
 
-app.listen(port, () => {
-  console.log(`Multi-carrier tracker listening on port ${port}`);
-});
+app.listen(port, () => console.log(`Server on :${port}`));
+
 
