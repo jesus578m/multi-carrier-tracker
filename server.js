@@ -9,7 +9,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const port = process.env.PORT || 8080;
-// 1 = activar scraping con Playwright
+// 1 = activar scraping con Playwright (extrae Estado/ETA/Entregado/Firmado/Origen/Destino)
 const USE_SCRAPE = process.env.USE_SCRAPE === "1";
 
 app.use(cors());
@@ -65,13 +65,13 @@ function sanitize(text) {
   return (text || "")
     .replace(/\u00A0/g, " ")                // nbsp
     .replace(/[ \t]+/g, " ")
-    .replace(/skip to main content/gi, "")
+    .replace(/skip to main content/gi, "")  // evitar falsos positivos
     .replace(/ir al contenido principal/gi, "")
     .trim();
 }
 
 async function readBodyText(page) {
-  // Extrae TODO el texto del body (más robusto que innerText a veces)
+  // Extrae todo el texto del body (más tolerante a cambios de DOM)
   return await page.evaluate(() => {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let buf = "";
@@ -97,9 +97,11 @@ async function scrapeFedEx(url) {
       (text.match(/(?:^|\n)\s*(Delivered|In transit|On vehicle for delivery)\b/i)?.[1])
     );
 
+    // Permite que “El 27/08/25 …” esté en la línea posterior al bloque “ENTREGADO”
     const deliveredAt = cap(
       (text.match(/(?:^|\n)\s*Entregado\s*(?:el|on)?\s*([^\n]+)/i)?.[1]) ||
-      (text.match(/(?:^|\n)\s*Delivered\s*(?:on)?\s*([^\n]+)/i)?.[1])
+      (text.match(/ENTREGADO[\s\S]{0,120}?El\s+([^\n]+)/i)?.[1]) ||
+      (text.match(/Delivered[\s\S]{0,120}?(?:on)?\s+([^\n]+)/i)?.[1])
     );
 
     const signedBy = cap(
@@ -112,8 +114,9 @@ async function scrapeFedEx(url) {
       (text.match(/(?:^|\n)\s*FROM\s*([A-Z ,.-]+)\b/)?.[1])
     );
 
+    // Destino: prioriza “ENTREGADO <LUGAR>”
     let destination = cap(
-      (text.match(/(?:^|\n)\s*ENTREGADO\s*([A-ZÁÉÍÓÚÑ ,.-]+)\b/)?.[1]) // lugar junto a ENTREGADO
+      (text.match(/(?:^|\n)\s*ENTREGADO\s*([A-ZÁÉÍÓÚÑ ,.-]+)\b/)?.[1])
     );
     if (!destination) {
       destination = cap(
@@ -158,7 +161,6 @@ async function scrapeDHL(url) {
       null
     );
 
-    // DHL no siempre muestra destino; evitamos falsos positivos
     return { status, eta, deliveredAt };
   });
 }
@@ -232,7 +234,7 @@ async function scrapeDeltaCargo(url) {
   });
 }
 
-// EXPEDITORS (muy básico, página dinámica)
+// EXPEDITORS (básico, landing dinámica)
 async function scrapeExpeditors(url) {
   return await withPage(async (page) => {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
@@ -266,16 +268,12 @@ app.get("/api/track", async (req, res) => {
   try {
     const { carrier, code } = req.query || {};
     if (!carrier || !code) {
-      return res
-        .status(400)
-        .json({ ok: false, error: "Faltan parámetros: carrier y code" });
+      return res.status(400).json({ ok: false, error: "Faltan parámetros: carrier y code" });
     }
 
     const url = officialLink(carrier, code);
     if (!url) {
-      return res
-        .status(400)
-        .json({ ok: false, error: "Carrier no soportado", carrier });
+      return res.status(400).json({ ok: false, error: "Carrier no soportado", carrier });
     }
 
     let details = {};
@@ -301,4 +299,3 @@ app.get("/", (_req, res) => res.redirect("/frontend/index.html"));
 app.listen(port, () => {
   console.log(`Server on :${port} | scraping=${USE_SCRAPE ? "ON" : "OFF"}`);
 });
-
