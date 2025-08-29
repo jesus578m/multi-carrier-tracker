@@ -107,7 +107,10 @@ app.post("/api/track", async (req, res) => {
     let details = {};
     try {
       details = await scrapeByCarrier(carrier, url);
+
+    
     } catch (e) {
+  
       // Si scraping está desactivado o falla, seguimos con detalles vacíos
       details = {};
     }
@@ -133,3 +136,33 @@ app.get("/", (_req, res) => {
 app.listen(port, () => {
   console.log(`Multi-carrier tracker listening on port ${port}`);
 });
+// GET endpoint para saltar WAF (solo permite GET)
+app.get("/api/track", async (req, res) => {
+  try {
+    const { carrier, code } = req.query || {};
+    if (!carrier || !code) {
+      return res.status(400).json({ ok: false, error: "Faltan parámetros: carrier y code" });
+    }
+    const url = officialLink(carrier, code);
+    if (!url) {
+      return res.status(400).json({ ok: false, error: "Carrier no soportado", carrier });
+    }
+    let details = {};
+    try {
+      details = await scrapeByCarrier(carrier, url);
+    } catch (e) {
+      details = {};
+    }
+    return res.json({
+      ok: true,
+      carrier,
+      code,
+      officialUrl: url,
+      ...details,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ ok: false, error: "Error interno" });
+  }
+});
+
